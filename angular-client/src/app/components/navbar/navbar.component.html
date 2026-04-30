@@ -1,0 +1,13 @@
+<nav>
+  <ul>
+    <li><a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{exact: true}">Home</a></li>
+    
+    @if (!(authService.currentUser$ | async)) {
+      <li><a routerLink="/login" routerLinkActive="active">Sign-On</a></li>
+    } @else {
+      <li><a routerLink="/users" routerLinkActive="active">All Users</a></li>
+      <li><a routerLink="/chat" routerLinkActive="active">Chat</a></li>
+      <li><a (click)="authService.logout()" style="cursor: pointer">Logout</a></li>
+    }
+  </ul>
+</nav>

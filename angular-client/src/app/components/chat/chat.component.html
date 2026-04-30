@@ -1,0 +1,86 @@
+<div class="whatsapp-layout">
+  
+  <div class="connection-toast" [class.show]="!isConnected">
+    <div class="spinner"></div>
+    <span>Connecting to server...</span>
+  </div>
+
+  <aside class="sidebar">
+    <header class="sidebar-header">
+      <div class="user-avatar">{{ currentUser!.username[0] | uppercase }}</div>
+      <div class="header-info">
+        <span class="my-name">{{ currentUser!.username }}</span>
+        <button (click)="onLogout()" class="logout-link">Logout</button>
+      </div>
+    </header>
+
+    <div class="user-list">
+      @for (user of orderedUsers; track user.username) {
+      <div class="user-item" 
+           [class.active]="selectedUser?.username === user.username"
+           (click)="selectUser(user)">
+        <div class="avatar">{{ user.username[0] | uppercase }}</div>
+        <div class="user-details">
+          <div class="name">{{ user.username }}</div>
+          @if (getLastMessage(user.username); as lastMsg) {
+            <div class="last-message">{{ lastMsg }}</div>
+          } @else {
+            <div class="address">{{ user.address }}</div>
+          }
+        </div>
+      </div>
+      }
+    </div>
+  </aside>
+
+  <main class="chat-area">
+    @if (selectedUser) {
+    <div class="active-chat">
+      <header class="chat-header">
+        <div class="avatar">{{ selectedUser.username[0] | uppercase }}</div>
+        <div class="chat-info">
+          <h3>{{ selectedUser.username }}</h3>
+          <p>{{ selectedUser.address }}</p>
+        </div>
+      </header>
+
+      <div class="messages-container">
+        @for (msg of messages; track msg.timestamp) {
+        <div class="message-bubble"
+             [ngClass]="{
+               'sent-msg': msg.sender === currentUser!.username, 
+               'received-msg': msg.sender !== currentUser!.username
+             }">
+          <p class="text">{{ msg.text }}</p>
+          <div class="msg-meta">
+            <span>{{ msg.timestamp | date:'HH:mm' }}</span>
+          </div>
+        </div>
+        }
+      </div>
+
+      <footer class="chat-footer">
+        <textarea 
+          [(ngModel)]="newMessage" 
+          (keydown)="onKeyDown($event)"
+          placeholder="Type a message..." 
+          maxlength="256"
+          rows="1">
+        </textarea>
+        <button 
+          (click)="sendMessage()" 
+          [disabled]="!newMessage.trim() || newMessage.length > 256 || !isConnected">
+          Send
+        </button>
+      </footer>
+    </div>
+    } @else {
+    <div class="welcome-screen">
+      <div class="content">
+        <h2>WhatsApp Desktop</h2>
+        <p>Select a contact to start messaging.</p>
+      </div>
+    </div>
+    }
+  </main>
+</div>

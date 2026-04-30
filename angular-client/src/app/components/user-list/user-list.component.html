@@ -1,0 +1,17 @@
+<div class="user-list-container">
+  <h2>Known Users</h2>
+  <div class="users-grid">
+    @for (user of users; track user.username) {
+      <div class="user-card" (click)="startChat(user)">
+        <div class="avatar">{{ user.username[0] | uppercase }}</div>
+        <div class="info">
+          <span class="name">{{ user.username }}</span>
+          <span class="address">{{ user.address }}</span>
+        </div>
+        <div class="action-hint">Click to Chat</div>
+      </div>
+    } @empty {
+      <div class="no-users">No users found.</div>
+    }
+  </div>
+</div>

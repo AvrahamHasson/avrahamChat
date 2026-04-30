@@ -1,0 +1,38 @@
+<div class="login-container">
+  <h2>Sign-On</h2>
+  <form [formGroup]="loginForm" (ngSubmit)="onSubmit()">
+    <div class="field">
+      <label>Username:</label>
+      <input
+        type="text"
+        formControlName="username"
+        placeholder="Enter your name (letters and spaces only)">
+      
+      @if (loginForm.get('username')?.touched && loginForm.get('username')?.invalid) {
+        <p style="color: red; font-size: 12px; margin-top: 4px;">
+          @if (loginForm.get('username')?.errors?.['pattern']) {
+            Only letters and spaces are allowed.
+          } @else {
+            Username must be at least 3 characters long.
+          }
+        </p>
+      }
+    </div>
+
+    <div class="field">
+      <label>IP:Port:</label>
+      <input
+        type="text"
+        formControlName="address"
+        placeholder="e.g. 192.168.1.1:8080">
+      
+      @if (loginForm.get('address')?.invalid && loginForm.get('address')?.dirty) {
+        <p style="color: red; font-size: 12px; margin-top: 4px;">
+          Format must be IP:Port (like 127.0.0.1:5000)
+        </p>
+      }
+    </div>
+
+    <button type="submit" [disabled]="loginForm.invalid">Connect</button>
+  </form>
+</div>

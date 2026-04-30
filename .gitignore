@@ -1,0 +1,17 @@
+# IDEs
+.idea/
+.vscode/
+*.iml
+
+# Kotlin/Java
+**/build/
+**/.gradle/
+
+# Angular
+**/node_modules/
+**/dist/
+**/.angular/
+
+# Go
+**/bin/
+go-tcp-medium/*.exe

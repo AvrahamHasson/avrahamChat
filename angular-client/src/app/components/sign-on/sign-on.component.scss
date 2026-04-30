@@ -1,0 +1,11 @@
+.login-container form {
+  display: flex;
+  flex-direction: column; 
+  gap: 1.25rem; 
+
+  button {
+    align-self: flex-start; 
+    width: fit-content;
+    min-width: 8.75rem; 
+  }
+}
