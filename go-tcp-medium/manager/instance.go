@@ -18,43 +18,46 @@ var (
 	instancesMu     sync.Mutex
 )
 
-func HandleInit(init *models.InitPayload, conn *amqp.Connection) { 
+func HandleInit(init *models.InitPayload, conn *amqp.Connection) {
 	instancesMu.Lock()
 	defer instancesMu.Unlock()
 
 	if stopChan, exists := activeInstances[init.TcpPort]; exists {
 		stopChan <- true
 		delete(activeInstances, init.TcpPort)
-		time.Sleep(100 * time.Millisecond) 
+		time.Sleep(200 * time.Millisecond) 
 	}
 
 	if init.Action == "LOGOUT" {
-		fmt.Printf("User %s logged out from port %s\n", init.Username, init.TcpPort)
-		return 
+		fmt.Printf("User %s logged out. Port %s released.\n", init.Username, init.TcpPort)
+		return
 	}
 
 	stopChan := make(chan bool, 1)
 	activeInstances[init.TcpPort] = stopChan
 	go runUserInstance(init.Username, init.TcpPort, conn, stopChan)
-	fmt.Printf("Successfully initialized instance for %s on port %s\n", init.Username, init.TcpPort)
+	fmt.Printf("Instance LIVE: %s on port %s\n", init.Username, init.TcpPort)
 }
 
 func runUserInstance(username string, port string, conn *amqp.Connection, stopChan chan bool) {
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Printf("[%s] Error opening channel: %v", username, err)
+		log.Printf("[%s] Channel Error: %v", username, err)
 		return
 	}
 	defer ch.Close()
 
-	outQ, inQ, statQ := fmt.Sprintf("go_outgoing_%s", username), fmt.Sprintf("go_incoming_%s", username), fmt.Sprintf("go_status_%s", username)
+	outQ := fmt.Sprintf("go_outgoing_%s", username)
+	inQ := fmt.Sprintf("go_incoming_%s", username)
+	statQ := fmt.Sprintf("go_status_%s", username)
+
 	for _, q := range []string{outQ, inQ, statQ} {
 		ch.QueueDeclare(q, false, false, false, false, nil)
 	}
 
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		log.Printf("[%s] TCP Listen error: %v", username, err)
+		log.Printf("[%s] Port %s is busy: %v", username, port, err)
 		return
 	}
 
@@ -66,7 +69,9 @@ func runUserInstance(username string, port string, conn *amqp.Connection, stopCh
 	go func() {
 		for {
 			conn, err := ln.Accept()
-			if err != nil { return } 
+			if err != nil {
+				return 
+			}
 			go handleIncomingTCP(conn, ch, inQ)
 		}
 	}()
@@ -76,51 +81,74 @@ func runUserInstance(username string, port string, conn *amqp.Connection, stopCh
 		select {
 		case <-stopChan:
 			return
-		case msg, ok := <-msgs:
-			if !ok { return }
-			
-			var p models.RabbitPayload
-			if err := json.Unmarshal(msg.Body, &p); err != nil { continue }
+		case d, ok := <-msgs:
+			if !ok {
+				return
+			}
 
-			go func(payload models.RabbitPayload) {
-				if !sendTCP(&payload) { return }
+			var payload models.RabbitPayload
+			if err := json.Unmarshal(d.Body, &payload); err != nil {
+				log.Printf("Unmarshal error: %v", err)
+				continue
+			}
 
-				statusUpdate, _ := json.Marshal(map[string]string{"uuid": payload.UUID, "status": "delivered"})
-				ch.Publish("", statQ, false, false, amqp.Publishing{
-					ContentType: "application/json", 
-					Body: statusUpdate,
-				})
-			}(p)
+			go func(p models.RabbitPayload) {
+				if success := sendTCP(&p); success {
+					statusUpdate, _ := json.Marshal(map[string]string{
+						"uuid":   p.UUID,
+						"status": "delivered",
+					})
+					ch.Publish("", statQ, false, false, amqp.Publishing{
+						ContentType: "application/json",
+						Body:        statusUpdate,
+					})
+				}
+			}(payload)
 		}
 	}
 }
 
-func sendTCP(p *models.RabbitPayload) bool { 
+func sendTCP(p *models.RabbitPayload) bool {
 	conn, err := net.DialTimeout("tcp", p.TargetAddress, 5*time.Second)
-	if err != nil { return false }
+	if err != nil {
+		log.Printf("Failed to connect to %s: %v", p.TargetAddress, err)
+		return false
+	}
 	defer conn.Close()
 
 	if err := tcp.WritePacket(conn, p.UUID, p.TargetUsername, p.Message); err != nil {
+		log.Printf("Write error: %v", err)
 		return false
 	}
 
 	ackBuf := make([]byte, 3)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	n, err := conn.Read(ackBuf)
 	return err == nil && string(ackBuf[:n]) == "ACK"
 }
 
 func handleIncomingTCP(conn net.Conn, ch *amqp.Channel, inQ string) {
 	defer conn.Close()
-	uuid, target, body, err := tcp.ReadPacket(conn)
-	if err != nil { return }
 
-	forwardPayload := map[string]interface{}{"targetUsername": target, "message": json.RawMessage(body)}
+	uuid, target, body, err := tcp.ReadPacket(conn)
+	if err != nil {
+		return
+	}
+
+	forwardPayload := map[string]interface{}{
+		"targetUsername": target,
+		"message":        json.RawMessage(body),
+	}
+	
 	finalJson, _ := json.Marshal(forwardPayload)
 
-	err = ch.Publish("", inQ, false, false, amqp.Publishing{ContentType: "application/json", Body: finalJson})
+	err = ch.Publish("", inQ, false, false, amqp.Publishing{
+		ContentType: "application/json",
+		Body:        finalJson,
+	})
+
 	if err == nil {
 		conn.Write([]byte("ACK"))
-		fmt.Printf("Received TCP for %s (UUID: %s)\n", target, uuid)
+		fmt.Printf("-> Forwarded msg to Rabbit: %s (UUID: %s)\n", target, uuid)
 	}
 }

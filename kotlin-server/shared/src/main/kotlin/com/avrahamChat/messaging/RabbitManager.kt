@@ -1,45 +1,53 @@
 package com.avrahamChat.messaging
 
+import com.avrahamChat.config.SerializationConfig.defaultJson
 import com.avrahamChat.config.AppConfig.RABBIT_HOST
+import com.avrahamChat.models.GoInitPayload
+import com.avrahamChat.models.MessageEnvelope
 import com.rabbitmq.client.Channel
 import com.rabbitmq.client.ConnectionFactory
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 object RabbitManager {
-    private const val EXCHANGE_NAME = "signon_events"
-    private lateinit var channel: Channel
+    const val EXCHANGE_NAME = "signon_events"
+    lateinit var channel: Channel
+        private set
 
     fun init(): Channel {
-        val factory = ConnectionFactory().apply { host = RABBIT_HOST }
-        channel = factory.newConnection().createChannel()
-        channel.exchangeDeclare(EXCHANGE_NAME, "fanout")
-        channel.queueDeclare("go_init", false, false, false, null)
-        return channel
+        val factory = ConnectionFactory().apply {
+            host = RABBIT_HOST
+            port = 5672
+            isAutomaticRecoveryEnabled = true
+        }
+
+        return try {
+            val connection = factory.newConnection()
+            channel = connection.createChannel()
+
+            channel.exchangeDeclare(EXCHANGE_NAME, "fanout")
+            channel.queueDeclare("go_init", false, false, false, null)
+
+            println("Successfully connected to RabbitMQ at $RABBIT_HOST")
+            channel
+        } catch (e: Exception) {
+            println("Failed to connect to RabbitMQ: ${e.message}")
+            throw e
+        }
     }
 
     fun initGoMedium(username: String, tcpPort: String, action: String = "LOGIN") {
-        val initPayload = buildJsonObject {
-            put("username", username)
-            put("tcpPort", tcpPort)
-            put("action", action)
-        }
-        channel.basicPublish("", "go_init", null, Json.encodeToString(initPayload).toByteArray())
+        val payload = GoInitPayload(username, tcpPort, action)
+        channel.basicPublish("", "go_init", null, defaultJson.encodeToString(payload).toByteArray())
     }
-
-    fun getChannel() = channel
-    fun getExchangeName() = EXCHANGE_NAME
 
     fun emitEvent(type: String, userName: String) {
-        val message = "$type:$userName"
-        channel.basicPublish(EXCHANGE_NAME, "", null, message.toByteArray())
+        channel.basicPublish(EXCHANGE_NAME, "", null, "$type:$userName".toByteArray())
     }
 
-    fun sendMessageToGo(senderUsername: String, jsonMessage: String) {
+    fun sendMessageToGo(senderUsername: String, envelope: MessageEnvelope) {
         val queueName = "go_outgoing_$senderUsername"
         channel.queueDeclare(queueName, false, false, false, null)
-        channel.basicPublish("", queueName, null, jsonMessage.toByteArray())
+        val body = defaultJson.encodeToString(envelope).toByteArray()
+        channel.basicPublish("", queueName, null, body)
     }
 }

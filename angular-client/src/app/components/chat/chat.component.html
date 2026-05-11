@@ -1,28 +1,28 @@
-<div class="whatsapp-layout">
+<div class="whatsapp-layout" *ngIf="vm$ | async as vm">
   
-  <div class="connection-toast" [class.show]="!isConnected">
+  <div class="connection-toast" [class.show]="!vm.status">
     <div class="spinner"></div>
     <span>Connecting to server...</span>
   </div>
 
-  <aside class="sidebar">
+  <aside class="sidebar" *ngIf="vm.user">
     <header class="sidebar-header">
-      <div class="user-avatar">{{ currentUser!.username[0] | uppercase }}</div>
+      <div class="user-avatar">{{ vm.user.username[0] | uppercase }}</div>
       <div class="header-info">
-        <span class="my-name">{{ currentUser!.username }}</span>
+        <span class="my-name">{{ vm.user.username }}</span>
         <button (click)="onLogout()" class="logout-link">Logout</button>
       </div>
     </header>
 
     <div class="user-list">
-      @for (user of orderedUsers; track user.username) {
+      @for (user of vm.orderedUsers; track user.username) {
       <div class="user-item" 
-           [class.active]="selectedUser?.username === user.username"
+           [class.active]="vm.selected?.username === user.username"
            (click)="selectUser(user)">
         <div class="avatar">{{ user.username[0] | uppercase }}</div>
         <div class="user-details">
           <div class="name">{{ user.username }}</div>
-          @if (getLastMessage(user.username); as lastMsg) {
+          @if (vm.lastMessages[user.username]; as lastMsg) {
             <div class="last-message">{{ lastMsg }}</div>
           } @else {
             <div class="address">{{ user.address }}</div>
@@ -34,22 +34,22 @@
   </aside>
 
   <main class="chat-area">
-    @if (selectedUser) {
+    @if (vm.selected && vm.user) {
     <div class="active-chat">
       <header class="chat-header">
-        <div class="avatar">{{ selectedUser.username[0] | uppercase }}</div>
+        <div class="avatar">{{ vm.selected.username[0] | uppercase }}</div>
         <div class="chat-info">
-          <h3>{{ selectedUser.username }}</h3>
-          <p>{{ selectedUser.address }}</p>
+          <h3>{{ vm.selected.username }}</h3>
+          <p>{{ vm.selected.address }}</p>
         </div>
       </header>
 
       <div class="messages-container">
-        @for (msg of messages; track msg.timestamp) {
+        @for (msg of vm.messages; track msg.timestamp) {
         <div class="message-bubble"
              [ngClass]="{
-               'sent-msg': msg.sender === currentUser!.username, 
-               'received-msg': msg.sender !== currentUser!.username
+               'sent-msg': msg.sender === vm.user.username, 
+               'received-msg': msg.sender !== vm.user.username
              }">
           <p class="text">{{ msg.text }}</p>
           <div class="msg-meta">
@@ -62,14 +62,14 @@
       <footer class="chat-footer">
         <textarea 
           [(ngModel)]="newMessage" 
-          (keydown)="onKeyDown($event)"
+          (keydown)="onKeyDown($event, vm.user, vm.selected)"
           placeholder="Type a message..." 
           maxlength="256"
           rows="1">
         </textarea>
         <button 
-          (click)="sendMessage()" 
-          [disabled]="!newMessage.trim() || newMessage.length > 256 || !isConnected">
+          (click)="sendMessage(vm.user, vm.selected)" 
+          [disabled]="!newMessage.trim() || !vm.status">
           Send
         </button>
       </footer>

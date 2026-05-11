@@ -1,110 +1,112 @@
 package com.avrahamChat.messaging
 
-import com.avrahamChat.routes.activeSessions
+import com.avrahamChat.config.SerializationConfig.defaultJson
 import com.avrahamChat.database.ChatRepository
-import com.avrahamChat.models.Message
+import com.avrahamChat.models.MessageEnvelope
+import com.avrahamChat.models.MessageStatus
+import com.avrahamChat.models.StatusUpdateReport
+import com.avrahamChat.routes.activeSessions
 import com.rabbitmq.client.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
 
 object RabbitConsumer {
-    private val consumerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val consumerScope = CoroutineScope(context = Dispatchers.IO + SupervisorJob())
 
     fun startEventListening() {
-        val channel = RabbitManager.getChannel()
+        val channel = RabbitManager.channel
         consumerScope.launch {
-            try {
-                val exchange = RabbitManager.getExchangeName()
+            runCatching {
+                val exchange = RabbitManager.EXCHANGE_NAME
                 val queueName = channel.queueDeclare().queue
                 channel.queueBind(queueName, exchange, "")
+
                 val deliverCallback = DeliverCallback { _, delivery ->
-                    val message = String(delivery.body, Charsets.UTF_8)
-                    handleEvent(message)
+                    handleEvent(message = delivery.body.toString(Charsets.UTF_8))
                 }
-                channel.basicConsume(queueName, false, deliverCallback, CancelCallback { })
-            } catch (e: Exception) {}
+
+                channel.basicConsume(queueName, false, deliverCallback) { _ -> }
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                System.err.println("Error in event listening: ${e.message}")
+            }
         }
     }
 
     fun startUserListening(username: String) {
-        val channel = RabbitManager.getChannel()
+        val channel = RabbitManager.channel
 
-        consumerScope.launch {
-            try {
-                val incomingQueue = "go_incoming_$username"
-                channel.queueDeclare(incomingQueue, false, false, false, null)
-                val deliverCallback = DeliverCallback { _, delivery ->
-                    val jsonContent = String(delivery.body, Charsets.UTF_8)
-                    handleIncomingMessageFromGo(jsonContent)
-                }
-                channel.basicConsume(incomingQueue, true, deliverCallback, CancelCallback { })
-            } catch (e: Exception) {}
+        setupQueueConsumer(channel = channel, queueName = "go_incoming_$username") { json ->
+            handleIncomingMessageFromGo(jsonContent = json)
         }
 
+        setupQueueConsumer(channel = channel, queueName = "go_status_$username") { json ->
+            handleStatusUpdate(jsonContent = json)
+        }
+    }
+
+    private fun setupQueueConsumer(channel: Channel, queueName: String, onMessage: (String) -> Unit) {
         consumerScope.launch {
-            try {
-                val statusQueue = "go_status_$username"
-                channel.queueDeclare(statusQueue, false, false, false, null)
+            runCatching {
+                channel.queueDeclare(queueName, false, false, false, null)
                 val deliverCallback = DeliverCallback { _, delivery ->
-                    val jsonContent = String(delivery.body, Charsets.UTF_8)
-                    handleStatusUpdate(jsonContent)
+                    onMessage(delivery.body.toString(Charsets.UTF_8))
                 }
-                channel.basicConsume(statusQueue, true, deliverCallback, CancelCallback { })
-            } catch (e: Exception) {}
+                channel.basicConsume(queueName, true, deliverCallback) { _ -> }
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                System.err.println("Error consuming from $queueName: ${e.message}")
+            }
         }
     }
 
     private fun handleIncomingMessageFromGo(jsonContent: String) {
-        try {
-            val jsonElement = Json.parseToJsonElement(jsonContent).jsonObject
-            val target = jsonElement["targetUsername"]?.jsonPrimitive?.content ?: return
-            val rawMessage = jsonElement["message"]?.let {
-                Json.decodeFromJsonElement<Message>(it)
-            } ?: return
+        runCatching { defaultJson.decodeFromString<MessageEnvelope>(jsonContent) }
+            .onSuccess { envelope ->
+                val updatedMessage = envelope.message.copy(status = MessageStatus.RECEIVED)
+                consumerScope.launch {
+                    ChatRepository.saveMessage(target = envelope.targetUsername, message = updatedMessage)
 
-            val updatedMessage = rawMessage.copy(status = "received")
-
-            consumerScope.launch {
-                ChatRepository.saveMessage(target, updatedMessage)
-                activeSessions[target]?.let { session ->
-                    try {
-                        session.send(Json.encodeToString(updatedMessage))
-                    } catch (e: Exception) {
-                        activeSessions.remove(target)
+                    activeSessions[envelope.targetUsername]?.let { session ->
+                        runCatching {
+                            session.send(content = defaultJson.encodeToString(value = updatedMessage))
+                        }.onFailure {
+                            activeSessions.remove(key = envelope.targetUsername)
+                        }
                     }
                 }
             }
-        } catch (e: Exception) {}
+            .onFailure { e ->
+                System.err.println("Failed to parse incoming message: ${e.message}")
+            }
     }
 
     private fun handleStatusUpdate(jsonContent: String) {
-        try {
-            val json = Json.parseToJsonElement(jsonContent).jsonObject
-            val uuid = json["uuid"]?.jsonPrimitive?.content ?: return
-            val status = json["status"]?.jsonPrimitive?.content ?: "delivered"
-
-            consumerScope.launch {
-                ChatRepository.updateMessageStatus(uuid, status)
+        runCatching { defaultJson.decodeFromString<StatusUpdateReport>(jsonContent) }
+            .onSuccess { report ->
+                consumerScope.launch {
+                    ChatRepository.updateMessageStatus(uuid = report.uuid, newStatus = report.status)
+                }
             }
-        } catch (e: Exception) {}
+            .onFailure { e ->
+                System.err.println("Failed to update status: ${e.message}")
+            }
     }
 
     private fun handleEvent(message: String) {
-        try {
-            val parts = message.split(":")
-            if (parts.size < 2 || parts[0] != "USER_LOGOUT") return
-            val username = parts[1]
-            activeSessions[username]?.let { session ->
-                consumerScope.launch {
-                    try {
-                        session.close(CloseReason(CloseReason.Codes.NORMAL, "Logged out"))
-                    } finally {
-                        activeSessions.remove(username)
-                    }
+        val parts = message.split(":")
+        if (parts.size < 2 || parts[0] != "USER_LOGOUT") return
+
+        val username = parts[1]
+        activeSessions[username]?.let { session ->
+            consumerScope.launch {
+                try {
+                    session.close(reason = CloseReason(code = CloseReason.Codes.NORMAL, message = "Logged out"))
+                } finally {
+                    activeSessions.remove(key = username)
                 }
             }
-        } catch (e: Exception) {}
+        }
     }
 }

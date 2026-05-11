@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
 data class Message(
     val uuid: String,
     val text: String,
-    val timestamp: String,
+    val timestamp: Long,
     val sender: String,
-    val status: String
+    val status: MessageStatus
 )
 

@@ -6,7 +6,7 @@ export const loginGuard: CanActivateFn = () => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
-  if (authService.currentUserValue) {
+  if (authService.currentUser) {
     return router.parseUrl('/chat');
   }
 

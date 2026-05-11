@@ -25,7 +25,7 @@ fun Application.module() {
     configureMonitoring(rabbitChannel)
 
     routing {
-        signonRouting()
+        signon()
     }
 }
 

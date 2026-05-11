@@ -1,8 +1,8 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, forkJoin, timer } from 'rxjs';
+import { BehaviorSubject, forkJoin, timer, map } from 'rxjs';
 import { webSocket, WebSocketSubject } from 'rxjs/webSocket';
-import { retry, delay, tap } from 'rxjs/operators';
+import { retry } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { Chat } from '../models/Chat';
 import { Message } from '../models/Message';
@@ -31,6 +31,17 @@ export class ChatService {
   private selectedUserSource = new BehaviorSubject<User | null>(null);
   selectedUser$ = this.selectedUserSource.asObservable();
 
+  lastMessages$ = this.messages$.pipe(
+    map(store => {
+      const lastMsgs: { [username: string]: string } = {};
+      Object.keys(store).forEach(user => {
+        const msgs = store[user];
+        lastMsgs[user] = msgs.length > 0 ? msgs[msgs.length - 1].text : '';
+      });
+      return lastMsgs;
+    })
+  );
+
   constructor() {
     this.authService.currentUser$.subscribe(user => {
       if (user) {
@@ -43,7 +54,7 @@ export class ChatService {
   }
 
   refreshAllData() {
-    const user = this.authService.currentUserValue;
+    const user = this.authService.currentUser;
     if (!user) return;
 
     forkJoin({
@@ -79,7 +90,8 @@ export class ChatService {
   }
 
   private connectWebSocket(username: string) {
-    this.closeConnection();
+    if (this.socket$) return;
+
     this.socket$ = webSocket(`${this.wsUrl}/${username}`);
 
     this.socket$.pipe(
@@ -98,11 +110,9 @@ export class ChatService {
     });
   }
 
-  private handleIncomingMessage(msg: any, currentUsername: string) {
+  private handleIncomingMessage(msg: Message, currentUsername: string) {
     if (!msg.sender || !msg.text) return;
-    
     const chatPartner = msg.sender === currentUsername ? msg.targetUsername : msg.sender;
-    
     if (!chatPartner) return;
 
     const message: Message = {
@@ -112,11 +122,7 @@ export class ChatService {
       status: 'received'
     };
 
-    if (!this.messagesSource.value[chatPartner]) {
-      this.refreshAllData();
-    } else {
-      this.addMessageLocally(chatPartner, message);
-    }
+    this.addMessageLocally(chatPartner, message);
   }
 
   private processRooms(rooms: Chat[], currentUsername: string) {

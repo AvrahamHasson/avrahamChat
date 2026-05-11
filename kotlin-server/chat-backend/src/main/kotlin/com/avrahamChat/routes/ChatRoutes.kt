@@ -2,32 +2,38 @@ package com.avrahamChat.routes
 
 import com.avrahamChat.config.AppConfig
 import com.avrahamChat.config.AppConfig.SIGNON_URL
+import com.avrahamChat.config.SerializationConfig.defaultJson
 import com.avrahamChat.database.ChatRepository
 import com.avrahamChat.messaging.RabbitManager
-import com.avrahamChat.models.*
+import com.avrahamChat.models.Message
+import com.avrahamChat.models.MessageEnvelope
+import com.avrahamChat.models.MessageStatus
 import com.avrahamChat.signonClient
+import io.ktor.client.request.*
+import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
-import io.ktor.client.request.*
-import io.ktor.http.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.time.LocalDateTime
-import java.util.UUID
+import kotlin.time.Duration.Companion.seconds
 
 val activeSessions = ConcurrentHashMap<String, DefaultWebSocketServerSession>()
 
-fun Route.chatRouting() {
+fun Route.chat() {
     get("/chats") {
         val username = call.request.queryParameters["username"]
-            ?: return@get call.respond(HttpStatusCode.BadRequest, "Missing username")
-        val userChats = ChatRepository.getChatsForUser(username)
-        call.respond(userChats)
+            ?: return@get call.respond(
+                status = HttpStatusCode.BadRequest,
+                message = "Missing username"
+            )
+
+        val chats = ChatRepository.getChatsForUser(username = username)
+        call.respond(message = chats)
     }
 
     webSocket("/chat-ws/{username}") {
@@ -35,56 +41,83 @@ fun Route.chatRouting() {
         activeSessions[username] = this
 
         val heartbeatJob = launch {
-            try {
-                while (isActive) {
-                    signonClient.post("$SIGNON_URL/heartbeat") {
-                        contentType(ContentType.Application.Json)
-                        setBody(username)
+            while (isActive) {
+                runCatching {
+                    signonClient.post(urlString = "$SIGNON_URL/heartbeat") {
+                        contentType(type = ContentType.Application.Json)
+                        setBody(body = username)
                     }
-                    delay(30000)
+                }.onFailure { e ->
+                    if (e is CancellationException) throw e
+                    System.err.println("Heartbeat failed for user $username: ${e.message}")
                 }
-            } catch (e: Exception) {}
+                delay(duration = 30.seconds)
+            }
         }
 
         try {
             for (frame in incoming) {
-                if (frame is Frame.Text) {
+                if (frame !is Frame.Text) continue
+
+                runCatching {
                     val text = frame.readText()
-                    val data = Json.decodeFromString<Map<String, String>>(text)
-                    val target = data["targetUsername"] ?: ""
-                    val content = data["text"] ?: ""
-                    val now = LocalDateTime.now().toString()
+                    val input = defaultJson.decodeFromString<Map<String, String>>(string = text)
+
+                    val target = input["targetUsername"] ?: return@runCatching
                     val messageUuid = UUID.randomUUID().toString()
 
-                    val newMessage = Message(messageUuid, content, now, username, "sent")
-                    ChatRepository.saveMessage(target, newMessage)
+                    val newMessage = Message(
+                        uuid = messageUuid,
+                        text = input["text"] ?: "",
+                        timestamp = System.currentTimeMillis(),
+                        sender = username,
+                        status = MessageStatus.SENT
+                    )
 
-                    if (activeSessions.containsKey(target)) {
-                        activeSessions[target]?.send(Json.encodeToString(newMessage))
+                    ChatRepository.saveMessage(
+                        target = target,
+                        message = newMessage
+                    )
+
+                    val targetSession = activeSessions[target]
+                    if (targetSession != null) {
+                        targetSession.send(content = defaultJson.encodeToString(value = newMessage))
                     } else {
-                        val targetAddress = ChatRepository.getUserAddress(target) ?: ""
-                        val payload = mapOf(
-                            "targetAddress" to JsonPrimitive(targetAddress),
-                            "targetUsername" to JsonPrimitive(target),
-                            "uuid" to JsonPrimitive(messageUuid),
-                            "message" to Json.encodeToJsonElement(newMessage)
+                        val targetAddress = ChatRepository.getUserAddress(username = target) ?: ""
+                        val envelope = MessageEnvelope(
+                            targetUsername = target,
+                            message = newMessage,
+                            targetAddress = targetAddress,
+                            uuid = messageUuid
                         )
-                        RabbitManager.sendMessageToGo(username, Json.encodeToString(payload))
+
+                        RabbitManager.sendMessageToGo(
+                            senderUsername = username,
+                            envelope = envelope
+                        )
                     }
+                }.onFailure { e ->
+                    System.err.println("Error processing message frame for $username: ${e.message}")
                 }
             }
         } finally {
             activeSessions.remove(username)
             heartbeatJob.cancel()
 
-            RabbitManager.initGoMedium(username, AppConfig.TCP_PORT.toString(), "LOGOUT")
+            RabbitManager.initGoMedium(
+                username = username,
+                tcpPort = AppConfig.TCP_PORT.toString(),
+                action = "LOGOUT"
+            )
 
-            try {
-                signonClient.post("$SIGNON_URL/disconnect") {
-                    contentType(ContentType.Application.Json)
-                    setBody(username)
+            runCatching {
+                signonClient.post(urlString = "$SIGNON_URL/disconnect") {
+                    contentType(type = ContentType.Application.Json)
+                    setBody(body = username)
                 }
-            } catch (e: Exception) {}
+            }.onFailure { e ->
+                System.err.println("Disconnect notification failed for user $username: ${e.message}")
+            }
         }
     }
 }

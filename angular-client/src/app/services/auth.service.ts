@@ -7,18 +7,13 @@ import { User } from '../models/User';
   providedIn: 'root'
 })
 export class AuthService {
-  private http = inject(HttpClient); 
-  
+  private http = inject(HttpClient);
   private apiUrl = 'http://localhost:8081';
   
   private userSource = new BehaviorSubject<User | null>(this.loadFromStorage());
   currentUser$ = this.userSource.asObservable();
 
-  get currentUserValue(): User | null {
-    return this.userSource.value;
-  }
-
-  getCurrentUserValue(): User | null {
+  get currentUser(): User | null {
     return this.userSource.value;
   }
 

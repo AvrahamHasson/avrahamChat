@@ -1,79 +1,44 @@
-import { Component, OnInit, inject, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, inject, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterModule, Router } from '@angular/router'; // הוספת Router לייבוא
-import { Subscription } from 'rxjs';
+import { Router, RouterModule } from '@angular/router';
+import { combineLatest, map, tap } from 'rxjs';
 import { ChatService } from '../../services/chat.service';
 import { AuthService } from '../../services/auth.service';
-import { User } from '../../models/User';
 import { Message } from '../../models/Message';
+import { User } from '../../models/User';
 
 @Component({
   selector: 'app-chat',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterModule],
   templateUrl: './chat.component.html',
-  styleUrl: './chat.component.scss'
+  styleUrl: './chat.component.scss',
+  changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class ChatComponent implements OnInit, OnDestroy {
+export class ChatComponent {
   private chatService = inject(ChatService);
   private authService = inject(AuthService);
-  private router = inject(Router); 
-  private cdr = inject(ChangeDetectorRef); 
-  private subscriptions = new Subscription();
+  private router = inject(Router);
 
-  currentUser: User | null = null;
-  orderedUsers: User[] = [];
-  selectedUser: User | null = null;
   newMessage: string = '';
-  messages: Message[] = [];
-  isConnected: boolean = true;
 
-  ngOnInit() {
-    this.currentUser = this.authService.getCurrentUserValue();
+  readonly vm$ = combineLatest({
+    user: this.authService.currentUser$,
+    orderedUsers: this.chatService.contactOrder$,
+    selected: this.chatService.selectedUser$,
+    status: this.chatService.connectionStatus$,
+    lastMessages: this.chatService.lastMessages$,
+    messages: combineLatest([
+      this.chatService.selectedUser$,
+      this.chatService.messages$
+    ]).pipe(
+      map(([user, store]) => (user ? store[user.username] || [] : [])),
+      tap(() => this.scrollToBottom())
+    )
+  });
 
-    this.subscriptions.add(
-      this.authService.currentUser$.subscribe(user => {
-        this.currentUser = user;
-        this.cdr.detectChanges(); 
-      })
-    );
-
-    this.subscriptions.add(
-      this.chatService.connectionStatus$.subscribe(status => {
-        this.isConnected = status;
-        this.cdr.detectChanges();
-      })
-    );
-
-    this.subscriptions.add(
-      this.chatService.selectedUser$.subscribe(user => {
-        this.selectedUser = user;
-        if (user) {
-          this.messages = this.chatService.getMessages(user.username);
-          this.scrollToBottom();
-        }
-        this.cdr.detectChanges();
-      })
-    );
-
-    this.subscriptions.add(
-      this.chatService.contactOrder$.subscribe(users => {
-        this.orderedUsers = users || [];
-        this.cdr.detectChanges();
-      })
-    );
-
-    this.subscriptions.add(
-      this.chatService.messages$.subscribe(store => {
-        if (this.selectedUser) {
-          this.messages = store[this.selectedUser.username] || [];
-          this.scrollToBottom();
-        }
-        this.cdr.detectChanges();
-      })
-    );
-
+  constructor() {
     this.chatService.refreshAllData();
   }
 
@@ -81,39 +46,31 @@ export class ChatComponent implements OnInit, OnDestroy {
     this.chatService.selectUser(user);
   }
 
-  sendMessage() {
+  sendMessage(currentUser: User, selectedUser: User) {
     const text = this.newMessage?.trim();
-    if (!text || !this.currentUser || !this.selectedUser) {
-      return;
-    }
+    if (!text) return;
 
     const msg: Message = {
       text: text,
       timestamp: new Date().toISOString(),
-      sender: this.currentUser.username,
+      sender: currentUser.username,
       status: 'sent'
     };
-  
-    this.chatService.addMessage(this.selectedUser.username, msg);
+
+    this.chatService.addMessage(selectedUser.username, msg);
     this.newMessage = '';
-    this.scrollToBottom();
   }
 
-  onKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey) {
+  onKeyDown(event: KeyboardEvent, currentUser: User | null, selectedUser: User | null) {
+    if (event.key === 'Enter' && !event.shiftKey && currentUser && selectedUser) {
       event.preventDefault();
-      this.sendMessage();
+      this.sendMessage(currentUser, selectedUser);
     }
-  }
-
-  getLastMessage(username: string): string {
-    const msgs = this.chatService.getMessages(username);
-    return msgs.length > 0 ? msgs[msgs.length - 1].text : '';
   }
 
   onLogout() {
     this.authService.logout();
-    this.router.navigate(['/login']); // ניווט חזרה לדף ההתחברות
+    this.router.navigate(['/login']);
   }
 
   private scrollToBottom() {
@@ -121,9 +78,5 @@ export class ChatComponent implements OnInit, OnDestroy {
       const container = document.querySelector('.messages-container');
       if (container) container.scrollTop = container.scrollHeight;
     }, 50);
-  }
-
-  ngOnDestroy() {
-    this.subscriptions.unsubscribe();
   }
 }

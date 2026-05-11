@@ -1,25 +1,28 @@
 package com.avrahamChat
 
 import com.avrahamChat.config.AppConfig.HTTP_PORT
-import io.ktor.server.websocket.*
-import io.ktor.serialization.kotlinx.*
-import kotlinx.serialization.json.Json
-import com.avrahamChat.routes.*
 import com.avrahamChat.messaging.RabbitConsumer
 import com.avrahamChat.messaging.RabbitManager
+import com.avrahamChat.routes.*
+
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation as ClientContentNegotiation
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
-import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation as ServerContentNegotiation
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.routing.*
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.http.*
+import io.ktor.server.websocket.*
 
-val signonClient = HttpClient(CIO) {
-    install(io.ktor.client.plugins.contentnegotiation.ContentNegotiation) {
+import kotlinx.serialization.json.Json
+
+val signonClient = HttpClient(engineFactory = CIO) {
+    install(plugin = ClientContentNegotiation) {
         json()
     }
 }
@@ -28,27 +31,30 @@ fun main() {
     RabbitManager.init()
     RabbitConsumer.startEventListening()
 
-    embeddedServer(Netty, port = HTTP_PORT) {
+    embeddedServer(factory = Netty, port = HTTP_PORT) {
         module()
     }.start(wait = true)
 }
 
 fun Application.module() {
-    install(ContentNegotiation) {
+    install(plugin = ServerContentNegotiation) {
         json()
     }
-    install(CORS) {
+
+    install(plugin = CORS) {
         anyHost()
-        allowMethod(HttpMethod.Post)
-        allowMethod(HttpMethod.Options)
-        allowHeader(HttpHeaders.ContentType)
-        allowHeader(HttpHeaders.Authorization)
+        allowMethod(method = HttpMethod.Post)
+        allowMethod(method = HttpMethod.Options)
+        allowHeader(header = HttpHeaders.ContentType)
+        allowHeader(header = HttpHeaders.Authorization)
     }
-    install(WebSockets) {
-        contentConverter = KotlinxWebsocketSerializationConverter(Json)
+
+    install(plugin = WebSockets) {
+        contentConverter = KotlinxWebsocketSerializationConverter(format = Json)
     }
+
     routing {
-        userRouting()
-        chatRouting()
+        user()
+        chat()
     }
 }

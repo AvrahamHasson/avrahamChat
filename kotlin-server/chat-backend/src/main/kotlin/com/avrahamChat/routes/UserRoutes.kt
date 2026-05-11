@@ -3,63 +3,81 @@ package com.avrahamChat.routes
 import com.avrahamChat.config.AppConfig.HTTP_PORT
 import com.avrahamChat.config.AppConfig.SIGNON_URL
 import com.avrahamChat.config.AppConfig.TCP_PORT
-import com.avrahamChat.database.DatabaseFactory
-import com.avrahamChat.models.UserData
-import com.avrahamChat.models.UserSession
-import com.avrahamChat.signonClient
-import com.avrahamChat.messaging.RabbitManager
 import com.avrahamChat.messaging.RabbitConsumer
+import com.avrahamChat.messaging.RabbitManager
+import com.avrahamChat.models.User
+import com.avrahamChat.models.UserSession
+import com.avrahamChat.models.UserSessionStatus
+import com.avrahamChat.signonClient
+import com.mongodb.client.model.Filters
+import com.mongodb.client.model.ReplaceOptions
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import io.ktor.client.request.*
-import com.mongodb.client.model.ReplaceOptions
-import com.mongodb.client.model.Filters
-import io.ktor.client.statement.*
 import kotlinx.coroutines.flow.toList
 
-fun Route.userRouting() {
-    val db = DatabaseFactory.getDatabase("chat_app")
-    val usersCollection = db.getCollection<UserData>("users")
+fun Route.user() {
+    val db = DatabaseFactory.getDatabase(dbName = "chat_app")
+    val usersCollection = db.getCollection<User>(collectionName = "users")
 
     get("/users") {
-        call.respond(usersCollection.find().toList())
+        val users = usersCollection.find().toList()
+        call.respond(message = users)
     }
 
     post("/sign-on") {
-        try {
-            val user = call.receive<UserData>()
-            val signonResponse = signonClient.post("$SIGNON_URL/login-notify") {
-                contentType(ContentType.Application.Json)
-                setBody(UserSession(
-                    username = user.username,
-                    address = user.address,
-                    backendPort = HTTP_PORT,
-                    tcpPort = TCP_PORT,
-                    lastHeartbeat = System.currentTimeMillis(),
-                    status = "ONLINE"
-                ))
+        runCatching {
+            val user = call.receive<User>()
+
+            val signonResponse = signonClient.post(urlString = "$SIGNON_URL/login-notify") {
+                contentType(type = ContentType.Application.Json)
+                setBody(
+                    body = UserSession(
+                        userId = user,
+                        backendPort = HTTP_PORT,
+                        tcpPort = TCP_PORT,
+                        lastHeartbeat = System.currentTimeMillis(),
+                        status = UserSessionStatus.ONLINE
+                    )
+                )
             }
 
             if (signonResponse.status != HttpStatusCode.OK) {
-                call.respond(signonResponse.status, mapOf("error" to signonResponse.bodyAsText()))
+                call.respond(
+                    status = signonResponse.status,
+                    message = mapOf("error" to signonResponse.bodyAsText())
+                )
                 return@post
             }
 
             usersCollection.replaceOne(
-                Filters.eq("username", user.username),
-                user,
-                ReplaceOptions().upsert(true)
+                filter = Filters.eq("username", user.username),
+                replacement = user,
+                options = ReplaceOptions().upsert(true)
             )
 
-            RabbitManager.initGoMedium(user.username, TCP_PORT.toString(), "LOGIN")
-            RabbitConsumer.startUserListening(user.username)
+            RabbitManager.initGoMedium(
+                username = user.username,
+                tcpPort = TCP_PORT.toString(),
+                action = "LOGIN"
+            )
 
-            call.respond(HttpStatusCode.Created, user)
-        } catch (e: Exception) {
-            call.respond(HttpStatusCode.InternalServerError, "Sign-on error")
+            RabbitConsumer.startUserListening(username = user.username)
+
+            call.respond(
+                status = HttpStatusCode.Created,
+                message = user
+            )
+        }.onFailure { e ->
+            System.err.println("Sign-on process failed: ${e.message}")
+            call.respond(
+                status = HttpStatusCode.InternalServerError,
+                message = "Sign-on error"
+            )
         }
     }
 }

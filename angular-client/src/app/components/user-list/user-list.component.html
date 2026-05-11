@@ -1,7 +1,7 @@
 <div class="user-list-container">
   <h2>Known Users</h2>
   <div class="users-grid">
-    @for (user of users; track user.username) {
+    @for (user of (users$ | async); track user.username) {
       <div class="user-card" (click)="startChat(user)">
         <div class="avatar">{{ user.username[0] | uppercase }}</div>
         <div class="info">
