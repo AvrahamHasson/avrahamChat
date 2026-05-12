@@ -33,7 +33,7 @@ fun Route.user() {
         runCatching {
             val user = call.receive<User>()
 
-            val signonResponse = signonClient.post(urlString = "$SIGNON_URL/login-notify") {
+            val signonResponse = signonClient.put(urlString = "$SIGNON_URL/login-notify") {
                 contentType(type = ContentType.Application.Json)
                 setBody(
                     body = UserSession(

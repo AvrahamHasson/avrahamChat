@@ -43,7 +43,7 @@ fun Route.chat() {
         val heartbeatJob = launch {
             while (isActive) {
                 runCatching {
-                    signonClient.post(urlString = "$SIGNON_URL/heartbeat") {
+                    signonClient.patch(urlString = "$SIGNON_URL/heartbeat") {
                         contentType(type = ContentType.Application.Json)
                         setBody(body = username)
                     }
@@ -111,7 +111,7 @@ fun Route.chat() {
             )
 
             runCatching {
-                signonClient.post(urlString = "$SIGNON_URL/disconnect") {
+                signonClient.patch(urlString = "$SIGNON_URL/disconnect") {
                     contentType(type = ContentType.Application.Json)
                     setBody(body = username)
                 }

@@ -18,25 +18,19 @@ fun main() {
 }
 
 fun Application.module() {
-    configureSerialization()
-
-    val rabbitChannel = RabbitManager.init()
-
-    configureMonitoring(rabbitChannel)
-
-    routing {
-        signon()
-    }
-}
-
-fun Application.configureSerialization() {
     install(ContentNegotiation) {
         json()
     }
-}
 
-fun Application.configureMonitoring(rabbitChannel: com.rabbitmq.client.Channel) {
+    RabbitManager.init()
+
     launch {
-        checkExpiredSessions()
+        startExpiredSessionMonitoring()
+    }
+
+    routing {
+        loginNotify()
+        heartbeat()
+        disconnect()
     }
 }
